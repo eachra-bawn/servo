@@ -1084,9 +1084,13 @@ impl Document {
         self.needs_restyle.set(RestyleReason::empty());
     }
 
+    pub(crate) fn stylesheets_changed_since_last_reflow(&self) -> bool {
+        self.stylesheets.borrow().has_changed()
+    }
+
     pub(crate) fn restyle_reason(&self) -> RestyleReason {
         let mut condition = self.needs_restyle.get();
-        if self.stylesheets.borrow().has_changed() {
+        if self.stylesheets_changed_since_last_reflow() {
             condition.insert(RestyleReason::StylesheetsChanged);
         }
 
@@ -2394,7 +2398,7 @@ impl Document {
         // https://github.com/immersive-web/navigation/issues/10
         #[cfg(feature = "webxr")]
         if pref!(dom_webxr_sessionavailable) && self.window.is_top_level() {
-            self.window.Navigator().Xr(cx).dispatch_sessionavailable();
+            self.window.Navigator(cx).Xr(cx).dispatch_sessionavailable();
         }
     }
 
@@ -4465,23 +4469,25 @@ impl Document {
         owner_node: &Element,
         sheet: Arc<Stylesheet>,
     ) {
-        let stylesheets = &mut *self.stylesheets.borrow_mut();
+        let insertion_point = {
+            let stylesheets = &mut *self.stylesheets.borrow_mut();
 
-        // FIXME(stevennovaryo): This is almost identical with the one in ShadowRoot::add_stylesheet.
-        let insertion_point = stylesheets
-            .iter()
-            .map(|(sheet, _origin)| sheet)
-            .find(|sheet_in_doc| {
-                match &sheet_in_doc.owner {
-                    StylesheetSource::Element(other_node) => {
-                        owner_node.upcast::<Node>().is_before(other_node.upcast())
-                    },
-                    // Non-constructed stylesheet should be ordered before the
-                    // constructed ones.
-                    StylesheetSource::Constructed(_) => true,
-                }
-            })
-            .cloned();
+            // FIXME(stevennovaryo): This is almost identical with the one in ShadowRoot::add_stylesheet.
+            stylesheets
+                .iter()
+                .map(|(sheet, _origin)| sheet)
+                .find(|sheet_in_doc| {
+                    match &sheet_in_doc.owner {
+                        StylesheetSource::Element(other_node) => {
+                            owner_node.upcast::<Node>().is_before(other_node.upcast())
+                        },
+                        // Non-constructed stylesheet should be ordered before the
+                        // constructed ones.
+                        StylesheetSource::Constructed(_) => true,
+                    }
+                })
+                .cloned()
+        };
 
         if self.has_browsing_context() {
             self.add_stylesheet_to_stylist(
@@ -4491,6 +4497,7 @@ impl Document {
             );
         }
 
+        let stylesheets = &mut *self.stylesheets.borrow_mut();
         DocumentOrShadowRoot::add_stylesheet(
             StylesheetSource::Element(Dom::from_ref(owner_node)),
             StylesheetSetRef::Document(stylesheets),
@@ -4512,14 +4519,16 @@ impl Document {
     ) {
         debug_assert!(cssom_stylesheet.is_constructed());
 
-        let stylesheets = &mut *self.stylesheets.borrow_mut();
         let sheet = cssom_stylesheet.style_stylesheet().clone();
+        let insertion_point = {
+            let stylesheets = &mut *self.stylesheets.borrow_mut();
 
-        let insertion_point = stylesheets
-            .iter()
-            .last()
-            .map(|(sheet, _origin)| sheet)
-            .cloned();
+            stylesheets
+                .iter()
+                .last()
+                .map(|(sheet, _origin)| sheet)
+                .cloned()
+        };
 
         if self.has_browsing_context() {
             self.add_stylesheet_to_stylist(
@@ -4529,6 +4538,7 @@ impl Document {
             );
         }
 
+        let stylesheets = &mut *self.stylesheets.borrow_mut();
         DocumentOrShadowRoot::add_stylesheet(
             StylesheetSource::Constructed(Dom::from_ref(cssom_stylesheet)),
             StylesheetSetRef::Document(stylesheets),
@@ -4538,24 +4548,12 @@ impl Document {
         );
     }
 
-    fn switch_font_face_set_to_loading_if_needed(&self, cx: &mut JSContext) {
+    pub(crate) fn switch_font_face_set_to_loading_if_needed(&self, cx: &mut JSContext) {
         if self.window.font_context().web_fonts_still_loading() != 0 &&
             let Some(font_face_set) = self.fonts.get()
         {
             font_face_set.switch_to_loading(cx);
         }
-    }
-
-    /// Given a stylesheet, load all web fonts from it in Layout.
-    pub(crate) fn load_web_fonts_from_stylesheet(
-        &self,
-        cx: &mut JSContext,
-        stylesheet: &Arc<Stylesheet>,
-    ) {
-        self.window
-            .layout()
-            .load_web_fonts_from_stylesheet(stylesheet, &self.window.web_font_context(cx.no_gc()));
-        self.switch_font_face_set_to_loading_if_needed(cx);
     }
 
     pub(crate) fn add_stylesheet_to_stylist(
@@ -4564,11 +4562,9 @@ impl Document {
         stylesheet: Arc<Stylesheet>,
         before_stylesheet: Option<Arc<Stylesheet>>,
     ) {
-        self.window.layout_mut().add_stylesheet(
-            stylesheet,
-            before_stylesheet,
-            &self.window.web_font_context(cx.no_gc()),
-        );
+        self.window
+            .layout_mut()
+            .add_stylesheet(stylesheet, before_stylesheet);
         self.switch_font_face_set_to_loading_if_needed(cx);
     }
 
@@ -4827,7 +4823,7 @@ impl Document {
         #[cfg(feature = "gamepad")]
         if visibility_state == DocumentVisibilityState::Hidden {
             self.window
-                .Navigator()
+                .Navigator(cx)
                 .GetGamepads(cx)
                 .unwrap_or_default()
                 .iter_mut()
@@ -5749,11 +5745,12 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
     /// <https://dom.spec.whatwg.org/#dom-document-createtreewalker>
     fn CreateTreeWalker(
         &self,
+        cx: &mut JSContext,
         root: &Node,
         what_to_show: u32,
         filter: Option<Rc<NodeFilter>>,
     ) -> DomRoot<TreeWalker> {
-        TreeWalker::new(self, root, what_to_show, filter)
+        TreeWalker::new(cx, self, root, what_to_show, filter)
     }
 
     /// <https://html.spec.whatwg.org/multipage/#document.title>
@@ -6450,7 +6447,7 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
         let resource_threads = self.window.as_global_scope().resource_threads().clone();
         *self.loader.borrow_mut() =
             DocumentLoader::new_with_threads(resource_threads, Some(self.url()));
-        ServoParser::parse_html_script_input(self, self.url());
+        ServoParser::parse_html_script_input(cx, self, self.url());
 
         // Step 17. Set the insertion point to point at just before the end of the input stream
         // (which at this point will be empty).

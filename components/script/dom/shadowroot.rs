@@ -12,7 +12,7 @@ use js::context::JSContext;
 use js::rust::{HandleValue, MutableHandleValue};
 use script_bindings::cell::{DomRefCell, RefMut};
 use script_bindings::error::{ErrorResult, Fallible};
-use script_bindings::reflector::reflect_dom_object;
+use script_bindings::reflector::reflect_dom_object_with_cx;
 use servo_arc::Arc;
 use style::author_styles::AuthorStyles;
 use style::invalidation::element::restyle_hints::RestyleHint;
@@ -60,7 +60,6 @@ use crate::dom::sanitizer::Sanitizer;
 use crate::dom::trustedtypes::trustedhtml::TrustedHTML;
 use crate::dom::types::EventTarget;
 use crate::dom::window::Window;
-use crate::script_runtime::CanGc;
 use crate::stylesheet_set::StylesheetSetRef;
 
 /// Whether a shadow root hosts an User Agent widget.
@@ -160,15 +159,15 @@ impl ShadowRoot {
     }
 
     pub(crate) fn new(
+        cx: &mut JSContext,
         host: &Element,
         document: &Document,
         mode: ShadowRootMode,
         slot_assignment_mode: SlotAssignmentMode,
         clonable: bool,
         is_user_agent_widget: IsUserAgentWidget,
-        can_gc: CanGc,
     ) -> DomRoot<ShadowRoot> {
-        reflect_dom_object(
+        reflect_dom_object_with_cx(
             Box::new(ShadowRoot::new_inherited(
                 host,
                 document,
@@ -178,7 +177,7 @@ impl ShadowRoot {
                 is_user_agent_widget,
             )),
             document.window(),
-            can_gc,
+            cx,
         )
     }
 
@@ -208,12 +207,7 @@ impl ShadowRoot {
     ///
     /// <https://drafts.csswg.org/cssom/#documentorshadowroot-final-css-style-sheets>
     #[cfg_attr(crown, expect(crown::unrooted_must_root))] // Owner needs to be rooted already necessarily.
-    pub(crate) fn add_owned_stylesheet(
-        &self,
-        cx: &mut JSContext,
-        owner_node: &Element,
-        sheet: Arc<Stylesheet>,
-    ) {
+    pub(crate) fn add_owned_stylesheet(&self, owner_node: &Element, sheet: Arc<Stylesheet>) {
         let stylesheets = &mut self.author_styles.borrow_mut().stylesheets;
 
         // FIXME(stevennovaryo): This is almost identical with the one in Document::add_stylesheet.
@@ -231,10 +225,6 @@ impl ShadowRoot {
             })
             .cloned();
 
-        if self.document.has_browsing_context() {
-            self.document.load_web_fonts_from_stylesheet(cx, &sheet);
-        }
-
         DocumentOrShadowRoot::add_stylesheet(
             StylesheetSource::Element(Dom::from_ref(owner_node)),
             StylesheetSetRef::Author(stylesheets),
@@ -246,21 +236,13 @@ impl ShadowRoot {
 
     /// Append a constructed stylesheet to the back of shadow root stylesheet set.
     #[cfg_attr(crown, expect(crown::unrooted_must_root))]
-    pub(crate) fn append_constructed_stylesheet(
-        &self,
-        cx: &mut JSContext,
-        cssom_stylesheet: &CSSStyleSheet,
-    ) {
+    pub(crate) fn append_constructed_stylesheet(&self, cssom_stylesheet: &CSSStyleSheet) {
         debug_assert!(cssom_stylesheet.is_constructed());
 
         let stylesheets = &mut self.author_styles.borrow_mut().stylesheets;
         let sheet = cssom_stylesheet.style_stylesheet().clone();
 
         let insertion_point = stylesheets.iter().last().cloned();
-
-        if self.document.has_browsing_context() {
-            self.document.load_web_fonts_from_stylesheet(cx, &sheet);
-        }
 
         DocumentOrShadowRoot::add_stylesheet(
             StylesheetSource::Constructed(Dom::from_ref(cssom_stylesheet)),
@@ -300,7 +282,7 @@ impl ShadowRoot {
     }
 
     /// Associate an element present in this shadow tree with the provided id.
-    pub(crate) fn register_element_id(&self, element: &Element, id: &Atom, _can_gc: CanGc) {
+    pub(crate) fn register_element_id(&self, element: &Element, id: &Atom) {
         self.document_fragment.id_map().add(id, element)
     }
 
