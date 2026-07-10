@@ -29,7 +29,7 @@ use bitflags::bitflags;
 use embedder_traits::{Cursor, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails};
 use euclid::{Point2D, Rect};
 use fonts::{FontContext, TextByteRange, WebFontDocumentContext};
-pub use layout_damage::LayoutDamage;
+pub use layout_damage::{AccessibilityDamage, LayoutDamage};
 pub use layout_dom::{
     DangerousStyleElementOf, DangerousStyleNodeOf, LayoutDomTypeBundle, LayoutElementOf,
     LayoutNodeOf,
@@ -187,7 +187,7 @@ impl SVGElementData<'_> {
 }
 
 /// The address of a node known to be valid. These are sent from script to layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct TrustedNodeAddress(pub *const c_void);
 
 #[expect(unsafe_code)]
@@ -282,14 +282,6 @@ pub trait Layout {
     /// if the [`ViewportDetails`] actually changed or `false` otherwise.
     fn set_viewport_details(&mut self, viewport_details: ViewportDetails) -> bool;
 
-    /// Load all fonts from the given stylesheet, returning the number of fonts that
-    /// need to be loaded.
-    fn load_web_fonts_from_stylesheet(
-        &self,
-        stylesheet: &ServoArc<Stylesheet>,
-        font_context: &WebFontDocumentContext,
-    );
-
     /// Add a stylesheet to this Layout. This will add it to the Layout's `Stylist` as well as
     /// loading all web fonts defined in the stylesheet. The second stylesheet is the insertion
     /// point (if it exists, the sheet needs to be inserted before it).
@@ -297,7 +289,6 @@ pub trait Layout {
         &mut self,
         stylesheet: ServoArc<Stylesheet>,
         before_stylsheet: Option<ServoArc<Stylesheet>>,
-        font_context: &WebFontDocumentContext,
     );
 
     /// Inform the layout that its ScriptThread is about to exit.
@@ -709,6 +700,8 @@ pub struct ReflowRequest {
     pub highlighted_dom_node: Option<OpaqueNode>,
     /// The current font context.
     pub document_context: WebFontDocumentContext,
+    /// Damage to the accessibility tree from DOM mutations.
+    pub accessibility_damage: Option<Vec<(TrustedNodeAddress, AccessibilityDamage)>>,
     /// Nodes which were removed from the DOM tree since the last reflow, which were rooted in
     /// [`AccessibilityData`]. Only set if [`pref::expensive_accessibility_test_assertions_enabled`]
     /// is set.

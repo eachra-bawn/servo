@@ -1320,6 +1320,7 @@ impl<T: stylo_malloc_size_of::MallocSizeOf, const FRACTION_BITS: u16> MallocSize
     }
 }
 
+malloc_size_of_is_stylo_malloc_size_of!(style::properties::PropertyId);
 malloc_size_of_is_stylo_malloc_size_of!(style::animation::DocumentAnimationSet);
 malloc_size_of_is_stylo_malloc_size_of!(style::attr::AttrIdentifier);
 malloc_size_of_is_stylo_malloc_size_of!(style::attr::AttrValue);
@@ -1330,7 +1331,7 @@ malloc_size_of_is_stylo_malloc_size_of!(style::computed_values::text_decoration_
 malloc_size_of_is_stylo_malloc_size_of!(style::computed_values::text_rendering::T);
 malloc_size_of_is_stylo_malloc_size_of!(style::dom::OpaqueNode);
 malloc_size_of_is_stylo_malloc_size_of!(style::font_face::ComputedFontStretchRange);
-malloc_size_of_is_stylo_malloc_size_of!(style::font_face::ComputedFontStyleDescriptor);
+malloc_size_of_is_stylo_malloc_size_of!(style::font_face::ComputedFontStyleRange);
 malloc_size_of_is_stylo_malloc_size_of!(style::font_face::ComputedFontWeightRange);
 malloc_size_of_is_stylo_malloc_size_of!(style::font_face::Source);
 malloc_size_of_is_stylo_malloc_size_of!(style::invalidation::element::restyle_hints::RestyleHint);
@@ -1350,6 +1351,7 @@ malloc_size_of_is_stylo_malloc_size_of!(style::selector_parser::RestyleDamage);
 malloc_size_of_is_stylo_malloc_size_of!(style::selector_parser::Snapshot);
 malloc_size_of_is_stylo_malloc_size_of!(style::shared_lock::SharedRwLock);
 malloc_size_of_is_stylo_malloc_size_of!(style::stylesheets::DocumentStyleSheet);
+malloc_size_of_is_stylo_malloc_size_of!(style::stylesheets::Origin);
 malloc_size_of_is_stylo_malloc_size_of!(style::stylist::Stylist);
 malloc_size_of_is_stylo_malloc_size_of!(style::values::computed::BorderStyle);
 malloc_size_of_is_stylo_malloc_size_of!(style::values::computed::ContentDistribution);

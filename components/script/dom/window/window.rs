@@ -41,11 +41,11 @@ use js::rust::{
     MutableHandleValue,
 };
 use layout_api::{
-    AxesOverflow, BoxAreaType, CSSPixelRectVec, ElementsFromPointResult, FragmentType, Layout,
-    LayoutImageDestination, PendingImage, PendingImageState, PendingRasterizationImage,
-    PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest, ReflowRequestRestyle,
-    ReflowStatistics, RestyleReason, ScrollContainerQueryFlags, ScrollContainerResponse,
-    TrustedNodeAddress, combine_id_with_fragment_type,
+    AccessibilityDamage, AxesOverflow, BoxAreaType, CSSPixelRectVec, ElementsFromPointResult,
+    FragmentType, Layout, LayoutImageDestination, PendingImage, PendingImageState,
+    PendingRasterizationImage, PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest,
+    ReflowRequestRestyle, ReflowStatistics, RestyleReason, ScrollContainerQueryFlags,
+    ScrollContainerResponse, TrustedNodeAddress, combine_id_with_fragment_type,
 };
 use malloc_size_of::MallocSizeOf;
 use media::WindowGLContext;
@@ -53,7 +53,7 @@ use net_traits::image_cache::{
     ImageCache, ImageCacheResponseCallback, ImageCacheResponseMessage, ImageLoadListener,
     ImageResponse, PendingImageId, PendingImageResponse, RasterizationCompleteResponse,
 };
-use net_traits::request::Referrer;
+use net_traits::request::{Origin, Referrer, RequestClient};
 use net_traits::{ResourceFetchTiming, ResourceThreads};
 use num_traits::ToPrimitive;
 use paint_api::{CrossProcessPaintApi, PinchZoomInfos};
@@ -189,7 +189,7 @@ use crate::messaging::{MainThreadScriptMsg, ScriptEventLoopReceiver, ScriptEvent
 use crate::microtask::{Microtask, UserMicrotask};
 use crate::network_listener::{ResourceTimingListener, submit_timing};
 use crate::realms::enter_auto_realm;
-use crate::script_runtime::{CanGc, Runtime};
+use crate::script_runtime::Runtime;
 use crate::script_thread::ScriptThread;
 use crate::script_window_proxies::ScriptWindowProxies;
 use crate::task_manager::TaskManager;
@@ -921,24 +921,63 @@ impl Window {
 
     pub(crate) fn web_font_context(&self, no_gc: &NoGC) -> WebFontDocumentContext {
         let global = self.as_global_scope();
+        let task_source = global
+            .task_manager()
+            .dom_manipulation_task_source()
+            .to_sendable();
+        let target_global = Trusted::new(global);
+        let document = self.document_unrooted(no_gc);
         WebFontDocumentContext {
-            policy_container: global.policy_container(),
-            request_client: global.request_client(Some(no_gc)),
-            document_url: global.api_base_url(),
+            policy_container: document.policy_container().clone(),
+            request_client: self.request_client(Some(no_gc)),
+            document_url: document.base_url(),
             csp_handler: Box::new(FontCspHandler {
-                global: Trusted::new(global),
-                task_source: global
-                    .task_manager()
-                    .dom_manipulation_task_source()
-                    .to_sendable(),
+                global: target_global.clone(),
+                task_source: task_source.clone(),
             }),
             network_timing_handler: Box::new(FontNetworkTimingHandler {
-                global: Trusted::new(global),
-                task_source: global
-                    .task_manager()
-                    .dom_manipulation_task_source()
-                    .to_sendable(),
+                global: target_global,
+                task_source,
             }),
+        }
+    }
+
+    /// Part of <https://fetch.spec.whatwg.org/#populate-request-from-client>
+    pub(crate) fn request_client(&self, no_gc: Option<&NoGC>) -> RequestClient {
+        // Step 1.2.2. If global is a Window object and global’s navigable is not null,
+        // then set request’s traversable for user prompts to global’s navigable’s traversable navigable.
+        let (
+            preloaded_resources,
+            insecure_requests_policy,
+            has_trustworthy_ancestor_origin,
+            policy_container,
+            origin,
+        ) = if let Some(no_gc) = no_gc {
+            let document = self.document_unrooted(no_gc);
+            (
+                document.preloaded_resources().clone(),
+                document.insecure_requests_policy(),
+                document.has_trustworthy_ancestor_or_current_origin(),
+                document.policy_container().clone(),
+                document.origin().clone(),
+            )
+        } else {
+            let document = self.Document();
+            (
+                document.preloaded_resources().clone(),
+                document.insecure_requests_policy(),
+                document.has_trustworthy_ancestor_or_current_origin(),
+                document.policy_container().clone(),
+                document.origin().clone(),
+            )
+        };
+        RequestClient {
+            preloaded_resources,
+            policy_container,
+            origin: Origin::Origin(origin.immutable().clone()),
+            is_nested_browsing_context: !self.is_top_level(),
+            insecure_requests_policy,
+            has_trustworthy_ancestor_origin,
         }
     }
 
@@ -1550,14 +1589,13 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-navigator>
-    fn Navigator(&self) -> DomRoot<Navigator> {
-        self.navigator
-            .or_init(|| Navigator::new(self, CanGc::deprecated_note()))
+    fn Navigator(&self, cx: &mut JSContext) -> DomRoot<Navigator> {
+        self.navigator.or_init(|| Navigator::new(cx, self))
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-clientinformation>
-    fn ClientInformation(&self) -> DomRoot<Navigator> {
-        self.Navigator()
+    fn ClientInformation(&self, cx: &mut JSContext) -> DomRoot<Navigator> {
+        self.Navigator(cx)
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-settimeout>
@@ -1731,8 +1769,8 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
     window_event_handlers!();
 
     /// <https://developer.mozilla.org/en-US/docs/Web/API/Window/screen>
-    fn Screen(&self, can_gc: CanGc) -> DomRoot<Screen> {
-        self.screen.or_init(|| Screen::new(self, can_gc))
+    fn Screen(&self, cx: &mut JSContext) -> DomRoot<Screen> {
+        self.screen.or_init(|| Screen::new(cx, self))
     }
 
     /// <https://drafts.csswg.org/cssom-view/#dom-window-visualviewport>
@@ -2620,6 +2658,11 @@ impl Window {
 
         let rooted_nodes_for_accessibility_integrity_check =
             document.rooted_nodes_for_accessibility_integrity_check();
+        let mut accessibility_damage: Option<Vec<(TrustedNodeAddress, AccessibilityDamage)>> = None;
+        if self.layout().accessibility_active() {
+            let mut accessibility_data = document.accessibility_data_mut();
+            accessibility_damage = Some(accessibility_data.drain_pending_accessibility_damage());
+        }
 
         // Send new document and relevant styles to layout.
         let reflow = ReflowRequest {
@@ -2634,6 +2677,7 @@ impl Window {
             animating_images: document.image_animation_manager().animating_images(),
             highlighted_dom_node: document.highlighted_dom_node().map(|node| node.to_opaque()),
             document_context,
+            accessibility_damage,
             rooted_nodes_for_accessibility_integrity_check,
         };
 
@@ -2660,6 +2704,8 @@ impl Window {
         }
 
         document.update_animations_post_reflow();
+
+        document.switch_font_face_set_to_loading_if_needed(cx);
 
         (
             reflow_result.reflow_phases_run,

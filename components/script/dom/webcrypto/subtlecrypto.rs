@@ -30,6 +30,7 @@ mod sha3_operation;
 mod sha_operation;
 mod turboshake_operation;
 mod x25519_operation;
+mod x448_operation;
 
 use std::fmt::Display;
 use std::ptr;
@@ -106,6 +107,8 @@ enum CryptoAlgorithm {
     X25519,
     #[strum(serialize = "Ed448")]
     Ed448,
+    #[strum(serialize = "X448")]
+    X448,
     #[strum(serialize = "AES-CTR")]
     AesCtr,
     #[strum(serialize = "AES-CBC")]
@@ -2638,6 +2641,9 @@ pub(crate) fn check_support_for_algorithm(
                 DeriveBitsAlgorithm::X25519(_) => {
                     length.is_none_or(|length| x25519_operation::SECRET_LENGTH as u32 * 8 >= length)
                 },
+                DeriveBitsAlgorithm::X448(_) => {
+                    length.is_none_or(|length| x448_operation::SECRET_LENGTH as u32 * 8 >= length)
+                },
                 DeriveBitsAlgorithm::Hkdf(_) => length.is_some_and(|length| length % 8 == 0),
                 DeriveBitsAlgorithm::Pbkdf2(normalized_algorithm) => {
                     length.is_some_and(|length| length % 8 == 0) &&
@@ -2692,7 +2698,8 @@ pub(crate) fn check_support_for_algorithm(
                 },
                 GenerateKeyAlgorithm::Ed25519(_) |
                 GenerateKeyAlgorithm::X25519(_) |
-                GenerateKeyAlgorithm::Ed448(_) => true,
+                GenerateKeyAlgorithm::Ed448(_) |
+                GenerateKeyAlgorithm::X448(_) => true,
                 GenerateKeyAlgorithm::AesCtr(normalized_algorithm) |
                 GenerateKeyAlgorithm::AesCbc(normalized_algorithm) |
                 GenerateKeyAlgorithm::AesGcm(normalized_algorithm) |
@@ -2724,6 +2731,7 @@ pub(crate) fn check_support_for_algorithm(
                 ImportKeyAlgorithm::Ed25519(_) |
                 ImportKeyAlgorithm::X25519(_) |
                 ImportKeyAlgorithm::Ed448(_) |
+                ImportKeyAlgorithm::X448(_) |
                 ImportKeyAlgorithm::AesCtr(_) |
                 ImportKeyAlgorithm::AesCbc(_) |
                 ImportKeyAlgorithm::AesGcm(_) |
@@ -2753,6 +2761,7 @@ pub(crate) fn check_support_for_algorithm(
                 ExportKeyAlgorithm::Ed25519(_) |
                 ExportKeyAlgorithm::X25519(_) |
                 ExportKeyAlgorithm::Ed448(_) |
+                ExportKeyAlgorithm::X448(_) |
                 ExportKeyAlgorithm::AesCtr(_) |
                 ExportKeyAlgorithm::AesCbc(_) |
                 ExportKeyAlgorithm::AesGcm(_) |
@@ -5149,6 +5158,7 @@ impl Operation for DeriveBitsOperation {
 enum DeriveBitsAlgorithm {
     Ecdh(SubtleEcdhKeyDeriveParams),
     X25519(SubtleEcdhKeyDeriveParams),
+    X448(SubtleEcdhKeyDeriveParams),
     Hkdf(SubtleHkdfParams),
     Pbkdf2(SubtlePbkdf2Params),
     Argon2(SubtleArgon2Params),
@@ -5165,6 +5175,9 @@ impl NormalizedAlgorithm for DeriveBitsAlgorithm {
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::X25519 => Ok(DeriveBitsAlgorithm::X25519(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
+            CryptoAlgorithm::X448 => Ok(DeriveBitsAlgorithm::X448(
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::Hkdf => Ok(DeriveBitsAlgorithm::Hkdf(
@@ -5187,6 +5200,7 @@ impl NormalizedAlgorithm for DeriveBitsAlgorithm {
         match self {
             DeriveBitsAlgorithm::Ecdh(algorithm) => algorithm.name,
             DeriveBitsAlgorithm::X25519(algorithm) => algorithm.name,
+            DeriveBitsAlgorithm::X448(algorithm) => algorithm.name,
             DeriveBitsAlgorithm::Hkdf(algorithm) => algorithm.name,
             DeriveBitsAlgorithm::Pbkdf2(algorithm) => algorithm.name,
             DeriveBitsAlgorithm::Argon2(algorithm) => algorithm.name,
@@ -5202,6 +5216,9 @@ impl DeriveBitsAlgorithm {
             },
             DeriveBitsAlgorithm::X25519(algorithm) => {
                 x25519_operation::derive_bits(algorithm, key, length)
+            },
+            DeriveBitsAlgorithm::X448(algorithm) => {
+                x448_operation::derive_bits(algorithm, key, length)
             },
             DeriveBitsAlgorithm::Hkdf(algorithm) => {
                 hkdf_operation::derive_bits(algorithm, key, length)
@@ -5324,6 +5341,7 @@ enum GenerateKeyAlgorithm {
     Ed25519(SubtleAlgorithm),
     X25519(SubtleAlgorithm),
     Ed448(SubtleAlgorithm),
+    X448(SubtleAlgorithm),
     AesCtr(SubtleAesKeyGenParams),
     AesCbc(SubtleAesKeyGenParams),
     AesGcm(SubtleAesKeyGenParams),
@@ -5364,6 +5382,9 @@ impl NormalizedAlgorithm for GenerateKeyAlgorithm {
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::Ed448 => Ok(GenerateKeyAlgorithm::Ed448(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
+            CryptoAlgorithm::X448 => Ok(GenerateKeyAlgorithm::X448(
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::AesCtr => Ok(GenerateKeyAlgorithm::AesCtr(
@@ -5412,6 +5433,7 @@ impl NormalizedAlgorithm for GenerateKeyAlgorithm {
             GenerateKeyAlgorithm::Ed25519(algorithm) => algorithm.name,
             GenerateKeyAlgorithm::X25519(algorithm) => algorithm.name,
             GenerateKeyAlgorithm::Ed448(algorithm) => algorithm.name,
+            GenerateKeyAlgorithm::X448(algorithm) => algorithm.name,
             GenerateKeyAlgorithm::AesCtr(algorithm) => algorithm.name,
             GenerateKeyAlgorithm::AesCbc(algorithm) => algorithm.name,
             GenerateKeyAlgorithm::AesGcm(algorithm) => algorithm.name,
@@ -5472,6 +5494,10 @@ impl GenerateKeyAlgorithm {
                 ed448_operation::generate_key(cx, global, extractable, usages)
                     .map(CryptoKeyOrCryptoKeyPair::CryptoKeyPair)
             },
+            GenerateKeyAlgorithm::X448(_algorithm) => {
+                x448_operation::generate_key(cx, global, extractable, usages)
+                    .map(CryptoKeyOrCryptoKeyPair::CryptoKeyPair)
+            },
             GenerateKeyAlgorithm::AesCtr(algorithm) => {
                 aes_ctr_operation::generate_key(cx, global, algorithm, extractable, usages)
                     .map(CryptoKeyOrCryptoKeyPair::CryptoKey)
@@ -5530,6 +5556,7 @@ enum ImportKeyAlgorithm {
     Ed25519(SubtleAlgorithm),
     X25519(SubtleAlgorithm),
     Ed448(SubtleAlgorithm),
+    X448(SubtleAlgorithm),
     AesCtr(SubtleAlgorithm),
     AesCbc(SubtleAlgorithm),
     AesGcm(SubtleAlgorithm),
@@ -5573,6 +5600,9 @@ impl NormalizedAlgorithm for ImportKeyAlgorithm {
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::Ed448 => Ok(ImportKeyAlgorithm::Ed448(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
+            CryptoAlgorithm::X448 => Ok(ImportKeyAlgorithm::X448(
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::AesCtr => Ok(ImportKeyAlgorithm::AesCtr(
@@ -5630,6 +5660,7 @@ impl NormalizedAlgorithm for ImportKeyAlgorithm {
             ImportKeyAlgorithm::Ed25519(algorithm) => algorithm.name,
             ImportKeyAlgorithm::X25519(algorithm) => algorithm.name,
             ImportKeyAlgorithm::Ed448(algorithm) => algorithm.name,
+            ImportKeyAlgorithm::X448(algorithm) => algorithm.name,
             ImportKeyAlgorithm::AesCtr(algorithm) => algorithm.name,
             ImportKeyAlgorithm::AesCbc(algorithm) => algorithm.name,
             ImportKeyAlgorithm::AesGcm(algorithm) => algorithm.name,
@@ -5712,6 +5743,9 @@ impl ImportKeyAlgorithm {
             },
             ImportKeyAlgorithm::Ed448(_algorithm) => {
                 ed448_operation::import_key(cx, global, format, key_data, extractable, usages)
+            },
+            ImportKeyAlgorithm::X448(_algorithm) => {
+                x448_operation::import_key(cx, global, format, key_data, extractable, usages)
             },
             ImportKeyAlgorithm::AesCtr(_algorithm) => {
                 aes_ctr_operation::import_key(cx, global, format, key_data, extractable, usages)
@@ -5802,6 +5836,7 @@ enum ExportKeyAlgorithm {
     Ed25519(SubtleAlgorithm),
     X25519(SubtleAlgorithm),
     Ed448(SubtleAlgorithm),
+    X448(SubtleAlgorithm),
     AesCtr(SubtleAlgorithm),
     AesCbc(SubtleAlgorithm),
     AesGcm(SubtleAlgorithm),
@@ -5842,6 +5877,9 @@ impl NormalizedAlgorithm for ExportKeyAlgorithm {
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::Ed448 => Ok(ExportKeyAlgorithm::Ed448(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
+            CryptoAlgorithm::X448 => Ok(ExportKeyAlgorithm::X448(
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
             CryptoAlgorithm::AesCtr => Ok(ExportKeyAlgorithm::AesCtr(
@@ -5890,6 +5928,7 @@ impl NormalizedAlgorithm for ExportKeyAlgorithm {
             ExportKeyAlgorithm::Ed25519(algorithm) => algorithm.name,
             ExportKeyAlgorithm::X25519(algorithm) => algorithm.name,
             ExportKeyAlgorithm::Ed448(algorithm) => algorithm.name,
+            ExportKeyAlgorithm::X448(algorithm) => algorithm.name,
             ExportKeyAlgorithm::AesCtr(algorithm) => algorithm.name,
             ExportKeyAlgorithm::AesCbc(algorithm) => algorithm.name,
             ExportKeyAlgorithm::AesGcm(algorithm) => algorithm.name,
@@ -5916,6 +5955,7 @@ impl ExportKeyAlgorithm {
             ExportKeyAlgorithm::Ed25519(_algorithm) => ed25519_operation::export_key(format, key),
             ExportKeyAlgorithm::X25519(_algorithm) => x25519_operation::export_key(format, key),
             ExportKeyAlgorithm::Ed448(_algorithm) => ed448_operation::export_key(format, key),
+            ExportKeyAlgorithm::X448(_algorithm) => x448_operation::export_key(format, key),
             ExportKeyAlgorithm::AesCtr(_algorithm) => aes_ctr_operation::export_key(format, key),
             ExportKeyAlgorithm::AesCbc(_algorithm) => aes_cbc_operation::export_key(format, key),
             ExportKeyAlgorithm::AesGcm(_algorithm) => aes_gcm_operation::export_key(format, key),
@@ -6155,6 +6195,8 @@ enum GetPublicKeyAlgorithm {
     Ecdh(SubtleAlgorithm),
     Ed25519(SubtleAlgorithm),
     X25519(SubtleAlgorithm),
+    Ed448(SubtleAlgorithm),
+    X448(SubtleAlgorithm),
     MlKem(SubtleAlgorithm),
     MlDsa(SubtleAlgorithm),
 }
@@ -6187,6 +6229,12 @@ impl NormalizedAlgorithm for GetPublicKeyAlgorithm {
             CryptoAlgorithm::X25519 => Ok(GetPublicKeyAlgorithm::X25519(
                 object.try_into_with_cx_and_name(cx, algorithm_name)?,
             )),
+            CryptoAlgorithm::Ed448 => Ok(GetPublicKeyAlgorithm::Ed448(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
+            CryptoAlgorithm::X448 => Ok(GetPublicKeyAlgorithm::X448(
+                object.try_into_with_cx_and_name(cx, algorithm_name)?,
+            )),
             CryptoAlgorithm::MlKem512 | CryptoAlgorithm::MlKem768 | CryptoAlgorithm::MlKem1024 => {
                 Ok(GetPublicKeyAlgorithm::MlKem(
                     object.try_into_with_cx_and_name(cx, algorithm_name)?,
@@ -6211,6 +6259,8 @@ impl NormalizedAlgorithm for GetPublicKeyAlgorithm {
             GetPublicKeyAlgorithm::Ecdh(algorithm) => algorithm.name,
             GetPublicKeyAlgorithm::Ed25519(algorithm) => algorithm.name,
             GetPublicKeyAlgorithm::X25519(algorithm) => algorithm.name,
+            GetPublicKeyAlgorithm::Ed448(algorithm) => algorithm.name,
+            GetPublicKeyAlgorithm::X448(algorithm) => algorithm.name,
             GetPublicKeyAlgorithm::MlKem(algorithm) => algorithm.name,
             GetPublicKeyAlgorithm::MlDsa(algorithm) => algorithm.name,
         }
@@ -6247,6 +6297,12 @@ impl GetPublicKeyAlgorithm {
             },
             GetPublicKeyAlgorithm::X25519(_algorithm) => {
                 x25519_operation::get_public_key(cx, global, key, algorithm, usages)
+            },
+            GetPublicKeyAlgorithm::Ed448(_algorithm) => {
+                ed448_operation::get_public_key(cx, global, key, algorithm, usages)
+            },
+            GetPublicKeyAlgorithm::X448(_algorithm) => {
+                x448_operation::get_public_key(cx, global, key, algorithm, usages)
             },
             GetPublicKeyAlgorithm::MlKem(_algorithm) => {
                 ml_kem_operation::get_public_key(cx, global, key, algorithm, usages)

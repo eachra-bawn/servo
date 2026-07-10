@@ -1553,13 +1553,15 @@ impl ScriptThread {
         // TODO(43149): Remove when document replacement is implemented
         {
             // https://html.spec.whatwg.org/multipage/#the-end step 6
-            let mut docs = self.docs_with_no_blocking_loads.borrow_mut();
-            for document in docs.iter() {
-                let mut realm = enter_auto_realm(cx, &**document);
-                let cx = &mut realm.current_realm();
-                document.maybe_queue_document_completion(cx);
+            {
+                let docs = self.docs_with_no_blocking_loads.borrow();
+                for document in docs.iter() {
+                    let mut realm = enter_auto_realm(cx, &**document);
+                    let cx = &mut realm.current_realm();
+                    document.maybe_queue_document_completion(cx);
+                }
             }
-            docs.clear();
+            self.docs_with_no_blocking_loads.borrow_mut().clear();
         }
 
         let built_any_display_lists =
@@ -4290,7 +4292,7 @@ impl ScriptThread {
         action: MediaSessionActionType,
     ) {
         if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
-            let media_session = window.Navigator().MediaSession(cx);
+            let media_session = window.Navigator(cx).MediaSession(cx);
             media_session.handle_action(cx, action);
         } else {
             warn!("No MediaSession for this pipeline ID");
