@@ -11,14 +11,14 @@ use std::sync::Arc;
 use std::{mem, thread_local};
 
 use imsz::imsz_from_reader;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use malloc_size_of::{MallocConditionalSizeOf, MallocSizeOf as MallocSizeOfTrait, MallocSizeOfOps};
 use malloc_size_of_derive::MallocSizeOf;
 use mime::Mime;
 use net_traits::image_cache::{
-    Image, ImageCache, ImageCacheFactory, ImageCacheResponseCallback, ImageCacheResponseMessage,
-    ImageCacheResult, ImageLoadListener, ImageOrMetadataAvailable, ImageResponse, PendingImageId,
-    RasterizationCompleteResponse, VectorImage,
+    FontResolver, Image, ImageCache, ImageCacheFactory, ImageCacheResponseCallback,
+    ImageCacheResponseMessage, ImageCacheResult, ImageLoadListener, ImageOrMetadataAvailable,
+    ImageResponse, PendingImageId, RasterizationCompleteResponse, VectorImage,
 };
 use net_traits::request::CorsSettings;
 use net_traits::{FetchMetadata, FetchResponseMsg, FilteredMetadata, NetworkError};
@@ -33,6 +33,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use servo_base::id::{PipelineId, WebViewId};
 use servo_base::threadpool::ThreadPool;
 use servo_url::{ImmutableOrigin, ServoUrl};
+use uuid::Uuid;
 use webrender_api::ImageKey as WebRenderImageKey;
 use webrender_api::units::DeviceIntSize;
 
@@ -81,17 +82,24 @@ const MAX_SVG_PIXMAP_DIMENSION: u32 = 5000;
 fn parse_svg_document_in_memory(
     bytes: &[u8],
     fontdb: Arc<fontdb::Database>,
+    font_resolver: Arc<dyn FontResolver>,
 ) -> Result<usvg::Tree, &'static str> {
     let image_string_href_resolver = Box::new(move |_: &str, _: &usvg::Options| {
         // Do not try to load `href` in <image> as local file path.
         None
     });
 
+    let font_resolver = usvg::FontResolver {
+        select_font: Box::new(move |font, database| font_resolver.resolve(font, database)),
+        select_fallback: usvg::FontResolver::default_fallback_selector(),
+    };
+
     let opt = usvg::Options {
         image_href_resolver: usvg::ImageHrefResolver {
             resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
             resolve_string: image_string_href_resolver,
         },
+        font_resolver,
         fontdb,
         ..usvg::Options::default()
     };
@@ -109,6 +117,7 @@ fn decode_bytes_sync(
     cors: CorsStatus,
     content_type: Option<Mime>,
     fontdb: Arc<fontdb::Database>,
+    font_resolver: Arc<dyn FontResolver>,
 ) -> DecoderMsg {
     let is_svg_document = content_type.is_some_and(|content_type| {
         (
@@ -119,7 +128,7 @@ fn decode_bytes_sync(
     });
 
     let image = if is_svg_document {
-        parse_svg_document_in_memory(bytes, fontdb)
+        parse_svg_document_in_memory(bytes, fontdb, font_resolver.clone())
             .ok()
             .map(|svg_tree| {
                 DecodedImage::Vector(VectorImageData {
@@ -310,6 +319,13 @@ impl ImageBytes {
         match *self {
             ImageBytes::InProgress(ref bytes) => bytes,
             ImageBytes::Complete(ref bytes) => bytes,
+        }
+    }
+
+    fn set_capacity(&mut self, size: usize) {
+        match self {
+            ImageBytes::InProgress(items) => items.reserve(size - items.len()),
+            ImageBytes::Complete(_) => error!("Want to set capacity on already completed image."),
         }
     }
 }
@@ -820,6 +836,7 @@ impl ImageCacheFactory for ImageCacheFactoryImpl {
         webview_id: WebViewId,
         pipeline_id: PipelineId,
         paint_api: &CrossProcessPaintApi,
+        font_resolver: Arc<dyn FontResolver>,
     ) -> Arc<dyn ImageCache> {
         Arc::new(ImageCacheImpl {
             store: Arc::new(Mutex::new(ImageCacheStore {
@@ -838,6 +855,7 @@ impl ImageCacheFactory for ImageCacheFactoryImpl {
             broken_image_icon_data: self.broken_image_icon_data.clone(),
             thread_pool: self.thread_pool.clone(),
             fontdb: self.fontdb.clone(),
+            font_resolver: font_resolver.clone(),
         })
     }
 }
@@ -846,7 +864,7 @@ pub struct ImageCacheImpl {
     /// Per-[`ImageCache`] data.
     store: Arc<Mutex<ImageCacheStore>>,
     /// Maps an SVGElement uuid to a pending image id in the store
-    svg_id_image_id_map: Arc<Mutex<FxHashMap<String, PendingImageId>>>,
+    svg_id_image_id_map: Arc<Mutex<FxHashMap<Uuid, PendingImageId>>>,
     /// The data to use for the broken image icon used when images cannot load.
     broken_image_icon_data: Arc<Vec<u8>>,
     /// Thread pool for image decoding. This is shared with other [`ImageCache`]s in the
@@ -855,6 +873,8 @@ pub struct ImageCacheImpl {
     /// A shared font database to be used by system fonts accessed when rasterizing vector
     /// images. This is shared with other [`ImageCache`]s in the same process.
     fontdb: Arc<fontdb::Database>,
+    /// the font_resolver callback to query and append the fonts to fontdb in svg
+    font_resolver: Arc<dyn FontResolver>,
 }
 
 impl ImageCache for ImageCacheImpl {
@@ -1002,7 +1022,7 @@ impl ImageCache for ImageCacheImpl {
         &self,
         image_id: PendingImageId,
         requested_size: DeviceIntSize,
-        svg_id: Option<String>,
+        svg_id: Option<Uuid>,
     ) -> Option<RasterImage> {
         let mut store = self.store.lock();
         let Some(vector_image) = store.vector_images.get(&image_id).cloned() else {
@@ -1157,7 +1177,7 @@ impl ImageCache for ImageCacheImpl {
         store.remove_loaded_image(url, origin, cors_setting);
     }
 
-    fn evict_rasterized_image(&self, svg_id: &str) {
+    fn evict_rasterized_image(&self, svg_id: &Uuid) {
         let mut store = self.store.lock();
         if let Some(mapped_image_id) = self.svg_id_image_id_map.lock().remove(svg_id) {
             store.pending_loads.remove(&mapped_image_id);
@@ -1256,9 +1276,16 @@ impl ImageCache for ImageCacheImpl {
 
                         let local_store = self.store.clone();
                         let fontdb = self.fontdb.clone();
+                        let font_resolver = self.font_resolver.clone();
                         self.thread_pool.spawn(move || {
-                            let msg =
-                                decode_bytes_sync(key, &bytes, cors_status, content_type, fontdb);
+                            let msg = decode_bytes_sync(
+                                key,
+                                &bytes,
+                                cors_status,
+                                content_type,
+                                fontdb,
+                                font_resolver,
+                            );
                             local_store.lock().handle_decoder(msg);
                         });
                     },
@@ -1267,6 +1294,12 @@ impl ImageCache for ImageCacheImpl {
                         let mut store = self.store.lock();
                         store.complete_load(id, LoadResult::FailedToLoadOrDecode)
                     },
+                }
+            },
+            (FetchResponseMsg::ProcessContentLength(_response_id, size), _key) => {
+                let mut store = self.store.lock();
+                if let Some(pending_load) = store.pending_loads.get_by_key_mut(&id) {
+                    pending_load.bytes.set_capacity(size);
                 }
             },
         }

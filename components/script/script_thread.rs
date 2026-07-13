@@ -160,6 +160,7 @@ use crate::script_runtime::{
     IntroductionType, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext, get_reports,
 };
 use crate::script_window_proxies::ScriptWindowProxies;
+use crate::svg_font::SvgFontResolver;
 use crate::task_queue::TaskQueue;
 use crate::webdriver_handlers::jsval_to_webdriver;
 use crate::{devtools, webdriver_handlers};
@@ -523,6 +524,7 @@ impl ScriptThreadFactory for ScriptThread {
     }
 }
 
+#[servo_tracing::instrument_all(skip_all)]
 impl ScriptThread {
     pub(crate) fn runtime_handle() -> ParentRuntime {
         with_optional_script_thread(|script_thread| {
@@ -3033,7 +3035,7 @@ impl ScriptThread {
                         CreatorBrowsingContextInfo::from(last.as_deref(), None),
                     );
                     self.window_proxies
-                        .insert(browsing_context_id, window_proxy.clone());
+                        .insert(browsing_context_id, &window_proxy);
                     last = Some(window_proxy);
                 }
 
@@ -3440,10 +3442,15 @@ impl ScriptThread {
             self.resource_threads.clone(),
         ));
 
+        let font_resolver = Arc::new(SvgFontResolver {
+            context: font_context.clone(),
+        });
+
         let image_cache = self.image_cache_factory.create(
             incomplete.webview_id,
             incomplete.pipeline_id,
             &self.paint_api,
+            font_resolver,
         );
 
         let (user_contents, user_stylesheets) = incomplete
@@ -3943,6 +3950,7 @@ impl ScriptThread {
                 self.handle_csp_violations(cx, pipeline_id, request_id, violations)
             },
             FetchResponseMsg::ProcessRequestBody(..) => {},
+            FetchResponseMsg::ProcessContentLength(_request_id, _size) => {},
         }
     }
 

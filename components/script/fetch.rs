@@ -560,23 +560,20 @@ impl FetchResponseListener for FetchContext {
             // given response, "immutable", and relevantRealm.
             Ok(metadata) => match metadata {
                 FetchMetadata::Unfiltered(m) => {
-                    fill_headers_with_metadata(cx, self.response_object.root(), m);
-                    self.response_object
-                        .root()
-                        .set_type(cx, DOMResponseType::Default);
+                    let r = self.response_object.root();
+                    fill_headers_with_metadata(cx, &r, m);
+                    r.set_type(cx, DOMResponseType::Default);
                 },
                 FetchMetadata::Filtered { filtered, .. } => match filtered {
                     FilteredMetadata::Basic(m) => {
-                        fill_headers_with_metadata(cx, self.response_object.root(), m);
-                        self.response_object
-                            .root()
-                            .set_type(cx, DOMResponseType::Basic);
+                        let r = self.response_object.root();
+                        fill_headers_with_metadata(cx, &r, m);
+                        r.set_type(cx, DOMResponseType::Basic);
                     },
                     FilteredMetadata::Cors(m) => {
-                        fill_headers_with_metadata(cx, self.response_object.root(), m);
-                        self.response_object
-                            .root()
-                            .set_type(cx, DOMResponseType::Cors);
+                        let r = self.response_object.root();
+                        fill_headers_with_metadata(cx, &r, m);
+                        r.set_type(cx, DOMResponseType::Cors);
                     },
                     FilteredMetadata::Opaque => {
                         self.response_object
@@ -700,7 +697,7 @@ impl ResourceTimingListener for FetchLaterListener {
     }
 }
 
-fn fill_headers_with_metadata(cx: &mut JSContext, r: DomRoot<Response>, m: Metadata) {
+fn fill_headers_with_metadata(cx: &mut JSContext, r: &Response, m: Metadata) {
     r.set_headers(cx, m.headers);
     r.set_status(&m.status);
     r.set_final_url(m.final_url);
@@ -753,6 +750,9 @@ pub(crate) fn load_whole_resource(
             FetchResponseMsg::ProcessResponseEOF(_, Err(e), _) => return Err(e),
             FetchResponseMsg::ProcessCspViolations(_, violations) => {
                 csp_violations_processor.process_csp_violations(cx, violations);
+            },
+            FetchResponseMsg::ProcessContentLength(_request_id, size) => {
+                buf.reserve(size - buf.len())
             },
         }
     }
